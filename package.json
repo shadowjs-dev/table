@@ -1,0 +1,115 @@
+{
+  "name": "@shadow-js/table",
+  "version": "1.0.0",
+  "description": "A headless data table with sorting, filtering, pagination, selection and grouping",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/dev/index.d.ts",
+      "development": "./dist/dev/index.js",
+      "default": "./dist/prod/index.js"
+    },
+    "./grouping": {
+      "types": "./dist/dev/grouping.d.ts",
+      "development": "./dist/dev/grouping.js",
+      "default": "./dist/prod/grouping.js"
+    },
+    "./expanding": {
+      "types": "./dist/dev/expanding.d.ts",
+      "development": "./dist/dev/expanding.js",
+      "default": "./dist/prod/expanding.js"
+    },
+    "./pinning": {
+      "types": "./dist/dev/pinning.d.ts",
+      "development": "./dist/dev/pinning.js",
+      "default": "./dist/prod/pinning.js"
+    },
+    "./sizing": {
+      "types": "./dist/dev/sizing.d.ts",
+      "development": "./dist/dev/sizing.js",
+      "default": "./dist/prod/sizing.js"
+    },
+    "./layout": {
+      "types": "./dist/dev/layout.d.ts",
+      "development": "./dist/dev/layout.js",
+      "default": "./dist/prod/layout.js"
+    },
+    "./faceting": {
+      "types": "./dist/dev/faceting.d.ts",
+      "development": "./dist/dev/faceting.js",
+      "default": "./dist/prod/faceting.js"
+    },
+    "./visibility": {
+      "types": "./dist/dev/visibility.d.ts",
+      "development": "./dist/dev/visibility.js",
+      "default": "./dist/prod/visibility.js"
+    },
+    "./ordering": {
+      "types": "./dist/dev/ordering.d.ts",
+      "development": "./dist/dev/ordering.js",
+      "default": "./dist/prod/ordering.js"
+    },
+    "./locale": {
+      "types": "./dist/dev/locale.d.ts",
+      "development": "./dist/dev/locale.js",
+      "default": "./dist/prod/locale.js"
+    },
+    "./full": {
+      "types": "./dist/dev/full.d.ts",
+      "development": "./dist/dev/full.js",
+      "default": "./dist/prod/full.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown --config-loader native",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test-types.json",
+    "typecheck:types": "tsc -p tsconfig.test-types.json",
+    "lint": "biome check .",
+    "test": "vitest run --project unit --project dom --project server",
+    "test:gc": "vitest run --project gc --passWithNoTests",
+    "test:perf": "vitest run --project perf --passWithNoTests",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:perf && npm run test:gc"
+  },
+  "peerDependencies": {
+    "@shadow-js/core": "^1.0.0",
+    "@shadow-js/web": "^1.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@shadow-js/core": "^1.0.0",
+    "@shadow-js/web": "^1.0.0",
+    "@types/node": "^24.0.0",
+    "fast-check": "^4.10.2",
+    "happy-dom": "^21.0.3",
+    "tsdown": "0.23.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  },
+  "homepage": "https://table.shadowjs.net",
+  "keywords": [
+    "shadowjs",
+    "table"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shadowjs-dev/table.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shadowjs-dev/table/issues"
+  }
+}
