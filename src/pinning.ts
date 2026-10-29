@@ -4,7 +4,7 @@
  * pinning members throw a `TypeError` that names the feature.
  * @packageDocumentation
  */
-import type { TableHost } from "./internal/host";
+import { type TableHost, untracked } from "./internal/host";
 import type { TableFeature } from "./types";
 
 /**
@@ -48,7 +48,7 @@ export const pinning: TableFeature<"pinning"> = {
       return "center";
     };
     hooks.sections = (side) => {
-      const visible = hooks.ordered().filter((column) => hooks.visible(column));
+      const visible = table.getVisibleLeafColumns();
       if (side === "center") {
         const pinned = new Set([...pinnedIds("left"), ...pinnedIds("right")]);
         return visible.filter((column) => !pinned.has(column.id));
@@ -57,8 +57,6 @@ export const pinning: TableFeature<"pinning"> = {
     };
 
     Object.assign(table, {
-      columnPinning: pinningSlice.current,
-      setColumnPinning: pinningSlice.set,
       getLeftLeafColumns: () => hooks.sections("left"),
       getCenterLeafColumns: () => hooks.sections("center"),
       getRightLeafColumns: () => hooks.sections("right"),
@@ -73,7 +71,7 @@ export const pinning: TableFeature<"pinning"> = {
           return sides.every((side) => side === first) ? first : false;
         },
         getCanPin: (): boolean => column.columnDef.enablePinning !== false,
-        pin: (position: "left" | "right" | false): void => {
+        pin: untracked((position: "left" | "right" | false): void => {
           const current = pinningSlice.current();
           const moved = host.targetsOf(column).map((leaf) => leaf.id);
           // The moved leaves leave both sides, and join the end of the side they are pinned to.
@@ -82,7 +80,7 @@ export const pinning: TableFeature<"pinning"> = {
             return position === side ? [...rest, ...moved] : rest;
           };
           pinningSlice.set({ left: without("left"), right: without("right") });
-        },
+        }),
       });
     }
   },

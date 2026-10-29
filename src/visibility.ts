@@ -4,7 +4,7 @@
  * a `TypeError` that names the feature.
  * @packageDocumentation
  */
-import type { TableHost } from "./internal/host";
+import { type TableHost, untracked } from "./internal/host";
 import type { TableFeature } from "./types";
 
 /**
@@ -37,26 +37,22 @@ import type { TableFeature } from "./types";
 export const visibility: TableFeature<"visibility"> = {
   name: "visibility",
   install<TData>(host: TableHost<TData>): void {
-    const { table, hooks } = host;
+    const { hooks } = host;
     const visibilitySlice = host.slice("columnVisibility", {});
     hooks.visible = (column) => {
       const state = visibilitySlice.current();
       return host.targetsOf(column).some((leaf) => state[leaf.id] !== false);
     };
-    Object.assign(table, {
-      columnVisibility: visibilitySlice.current,
-      setColumnVisibility: visibilitySlice.set,
-    });
     for (const column of host.columns) {
       Object.assign(column, {
         getIsVisible: (): boolean => hooks.visible(column),
         getCanHide: (): boolean => column.columnDef.enableHiding !== false,
-        toggleVisibility: (value?: boolean): void => {
+        toggleVisibility: untracked((value?: boolean): void => {
           const next = value ?? !hooks.visible(column);
           const state = { ...visibilitySlice.current() };
           for (const leaf of host.targetsOf(column)) state[leaf.id] = next;
           visibilitySlice.set(state);
-        },
+        }),
       });
     }
   },

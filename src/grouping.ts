@@ -6,7 +6,7 @@
  * @packageDocumentation
  */
 import { aggregate } from "./internal/functions";
-import type { TableHost } from "./internal/host";
+import { type TableHost, untracked } from "./internal/host";
 import { leavesOf, treeModel, type View } from "./internal/tree";
 import type { Row, TableFeature } from "./types";
 
@@ -52,9 +52,7 @@ export const grouping: TableFeature<"grouping"> = {
       __DEV__ ? "model.grouped" : undefined,
     );
     Object.assign(table, {
-      grouping: slice.current,
-      setGrouping: slice.set,
-      getGroupedRowModel: () => groupedModel(),
+      getGroupedRowModel: groupedModel,
     });
 
     hooks.group = (filtered: View<TData>): View<TData> => {
@@ -142,14 +140,14 @@ export const grouping: TableFeature<"grouping"> = {
         getCanGroup: (): boolean =>
           column.columnDef.enableGrouping === true && column.columns.length === 0,
         getIsGrouped: (): boolean => slice.current().includes(column.id),
-        toggleGrouping: (): void => {
+        toggleGrouping: untracked((): void => {
           const current = slice.current();
           slice.set(
             current.includes(column.id)
               ? current.filter((id) => id !== column.id)
               : [...current, column.id],
           );
-        },
+        }),
       });
     }
   },

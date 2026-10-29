@@ -44,7 +44,7 @@ export const layout: TableFeature<"layout"> = {
   name: "layout",
   install<TData>(host: TableHost<TData>): void {
     const { table, hooks } = host;
-    const shown = (): Column<TData>[] => hooks.ordered().filter((column) => hooks.visible(column));
+    const shown = table.getVisibleLeafColumns;
 
     /** The nearest ancestor of a leaf at a depth: the leaf itself when it is at that depth, else its group. */
     const ancestorAt = (leaf: Column<TData>, level: number): Column<TData> => {

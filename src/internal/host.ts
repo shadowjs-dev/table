@@ -4,7 +4,7 @@
  * internals the feature builds on.
  * @packageDocumentation
  */
-import type { Accessor } from "@shadow-js/core";
+import { type Accessor, untrack } from "@shadow-js/core";
 import type { Column, ColumnDef, Row, RowModel, Table, TableOptions, TableState } from "../types";
 import type { View } from "./tree";
 
@@ -13,6 +13,16 @@ export const DEFAULT_SIZE = 150;
 
 /** The narrowest a column is, unless its definition says otherwise. */
 export const MIN_SIZE = 20;
+
+/**
+ * A mutator that reads state to decide what to write (a toggle, a page step): it runs untracked, so
+ * calling it inside an effect or a computation does not make that owner depend on the table state.
+ * @internal
+ */
+export const untracked =
+  <A extends readonly unknown[]>(run: (...args: A) => void) =>
+  (...args: A): void =>
+    untrack(() => run(...args));
 
 /** The sections a column can render in: pinned left, the center, pinned right. */
 export type Side = "left" | "center" | "right";

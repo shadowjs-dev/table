@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.3
+
+### Fixed
+
+- Smaller bundles with the same behavior. Production builds of table, query and virtual throw short codes (`TABLE_DUPLICATE`, `QUERY_LIMIT`, `VIRTUAL_KERNEL`) instead of the development messages; each package's README lists them.
+- table: `min`, `max` and `extent` aggregations no longer throw a `RangeError` for a very large group (loops, not spread arguments)
+- table: an uncontrolled pager returns to the first page when a controlled column filter, global filter or grouping changes
+- table: mutators (`setPageIndex`, `nextPage`, `toggleSelected`, `toggleExpanded`, `toggleSorting`, `setFilterValue`, `pin`, `toggleVisibility` and the rest) and state updaters run untracked, so calling one in an effect no longer makes the effect depend on table state
+- table: tree selection keeps parents consistent: deselecting every child deselects the parent, selecting every child selects it, and `getIsSomeRowsSelected` and `Row.getIsSomeSelected` count rows at any depth
+- table: `Row.getIsExpanded` reads a per-row flag, so a row's readers no longer rerun when another row toggles
+- table: `inNumberRange` leaves `NaN` out of every range
+- table: faceting memoizes each column's facets, so reading them again runs no filter
+
 ## 1.0.2
 
 ### Fixed

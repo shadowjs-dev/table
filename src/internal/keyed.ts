@@ -14,8 +14,8 @@ export interface KeyedFlags {
   get(key: string): boolean;
   /** Updates the flags to `next`: only the keys whose flag changed notify their readers. */
   sync(next: Readonly<Record<string, boolean>>): void;
-  /** How many keys have a signal right now (for tests and diagnostics). */
-  readonly size: number;
+  /** How many keys have a signal right now: development builds only (tests and diagnostics), `undefined` in production. */
+  readonly size?: number;
 }
 
 /** The cells a set of flags holds before it first looks for cells of keys that are gone. */
@@ -56,10 +56,7 @@ export function keyedFlags(
     cells.set(key, cell);
     return cell;
   };
-  return {
-    get size() {
-      return cells.size;
-    },
+  const flags: KeyedFlags = {
     get(key) {
       const cell = cellFor(key);
       if (live !== undefined && getOwner() !== null) {
@@ -83,4 +80,7 @@ export function keyedFlags(
       });
     },
   };
+  // A diagnostic: production bundles do not carry it.
+  if (__DEV__) Object.defineProperty(flags, "size", { get: () => cells.size });
+  return flags;
 }

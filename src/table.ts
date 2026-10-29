@@ -26,6 +26,7 @@ import {
   sizeOfDef,
   type TableHooks,
   type TableHost,
+  untracked,
 } from "./internal/host";
 import { keyedFlags } from "./internal/keyed";
 import { absent, featureMissing } from "./internal/missing";
@@ -44,10 +45,10 @@ import type {
   Column,
   ColumnDef,
   FilterFn,
+  PaginationState,
   Row,
   RowModel,
   SortingEntry,
-  SortingFn,
   Table,
   TableFeature,
   TableFeatureName,
@@ -94,6 +95,19 @@ const OWNED_COLUMN =
 
 /** Something both a column and a row can be asked for by id. */
 type Lookup<TData> = Map<string, Column<TData>>;
+
+/** The members that the state slices add to the table: the core literal leaves them out. */
+type CoreSliceMember =
+  | "sorting"
+  | "setSorting"
+  | "columnFilters"
+  | "setColumnFilters"
+  | "globalFilter"
+  | "setGlobalFilter"
+  | "pagination"
+  | "setPagination"
+  | "rowSelection"
+  | "setRowSelection";
 
 /** The table members the features own (the names only), so the core literal leaves them out. */
 type OwnedTableName =
@@ -171,7 +185,7 @@ function buildColumns<TData>(
     }
     const children: Column<TData>[] = [];
     const depth = parent === undefined ? 0 : parent.depth + 1;
-    const column = createColumn(def, def.id ?? accessorKeyOf(def) ?? "", parent, depth, children);
+    const column = createColumn(def, parent, depth, children);
     out.push(column);
     into.push(column);
     stack.push([undefined, column, children]);
@@ -179,45 +193,27 @@ function buildColumns<TData>(
   }
 }
 
-/** The key a column reads, when it has one. */
-function accessorKeyOf<TData>(def: ColumnDef<TData>): string | undefined {
-  return "accessorKey" in def ? def.accessorKey : undefined;
-}
-
-/** The function a column computes its value with, when it has one. */
-function accessorFnOf<TData>(
-  def: ColumnDef<TData>,
-): ((original: TData, index: number) => unknown) | undefined {
-  return "accessorFn" in def
-    ? (def.accessorFn as ((original: TData, index: number) => unknown) | undefined)
-    : undefined;
-}
-
 /** One column object; the state methods are attached by {@link createTable}. */
 function createColumn<TData>(
   def: ColumnDef<TData>,
-  id: string,
   parent: Column<TData> | undefined,
   depth: number,
   children: Column<TData>[],
 ): Column<TData> {
-  const key = accessorKeyOf(def);
-  const computed = accessorFnOf(def);
-  const accessorFn: ((original: TData, index: number) => unknown) | undefined =
-    computed !== undefined
-      ? computed
-      : key !== undefined
-        ? (original: TData) => (original as Record<string, unknown>)[key]
-        : undefined;
-  const column = {
-    id,
+  const key = "accessorKey" in def ? def.accessorKey : undefined;
+  const computed = "accessorFn" in def ? def.accessorFn : undefined;
+  return {
+    id: def.id ?? key ?? "",
     depth,
     columnDef: def,
     parent,
     columns: children,
-    accessorFn,
+    accessorFn:
+      computed ??
+      (key === undefined
+        ? undefined
+        : (original: TData) => (original as Record<string, unknown>)[key]),
   } as unknown as Column<TData>;
-  return column;
 }
 
 /**
@@ -265,7 +261,19 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     typeof options.data === "function" ? options.data : () => options.data as readonly TData[];
   const initial = options.initialState ?? {};
   const defaultSize = options.defaultColumnSize ?? DEFAULT_SIZE;
-  const readers = new Map<keyof TableState, () => unknown>();
+  /** The members that the slices add to the table (`name` and `setName`), put on it once the features are installed. */
+  const members: Record<string, unknown> = {};
+  const register = (
+    name: keyof TableState,
+    slice: { readonly current: Accessor<unknown>; readonly set: unknown },
+  ): void => {
+    members[name] = slice.current;
+    members[name.replace(/^./, (first) => `set${first.toUpperCase()}`)] = slice.set;
+  };
+  /** The controlled filters and grouping, with the value each had when the page was last written (see `pageNow`). */
+  const seen = new Map<Accessor<unknown>, unknown>();
+  /** Whether the table owns the page: manual pagination and a controlled page are left to the caller. */
+  const auto = options.manualPagination !== true && options.state?.pagination === undefined;
 
   /** One slice of state: its signal, or the controlled accessor, and the setter. */
   function slice<K extends keyof TableState>(
@@ -276,11 +284,13 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     const controlled = options.state?.[name] as Accessor<TableState[K]> | undefined;
     const [read, write] = useSignal<TableState[K]>(initial[name] ?? fallback);
     const current: Accessor<TableState[K]> = controlled ?? read;
-    const set = (value: TableState[K] | ((previous: TableState[K]) => TableState[K])): void => {
-      const previous = untrack(current);
+    if (auto && controlled !== undefined && onWrite === resetPage)
+      seen.set(controlled, untrack(controlled));
+    // Untracked as a whole: the updater, `onWrite` and `onStateChange` are the app's callbacks.
+    const set = untracked((value: TableState[K] | ((previous: TableState[K]) => TableState[K])) => {
       const next =
         typeof value === "function" && name !== "globalFilter"
-          ? (value as (previous: TableState[K]) => TableState[K])(previous)
+          ? (value as (previous: TableState[K]) => TableState[K])(current())
           : (value as TableState[K]);
       if (controlled === undefined) {
         // An updater that ignores its argument: the value itself may be a function (a global filter).
@@ -288,16 +298,11 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
         onWrite?.(next);
       }
       options.onStateChange?.(name, next);
-    };
-    readers.set(name, current);
-    return { current, set, controlled: controlled !== undefined };
+    });
+    const made = { current, set, controlled: controlled !== undefined };
+    register(name, made);
+    return made;
   }
-
-  /** The current value of a slice; a slice whose feature is not installed reads as its empty value. */
-  const read = <K extends keyof TableState>(name: K): TableState[K] => {
-    const reader = readers.get(name);
-    return reader === undefined ? EMPTY[name] : (reader() as TableState[K]);
-  };
 
   /**
    * Automatic pagination: a change of the rows a filter or a grouping keeps returns to the first
@@ -305,7 +310,8 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
    * and a controlled page are left to the caller.
    */
   const resetPage = (): void => {
-    if (options.manualPagination === true || paginationSlice.controlled) return;
+    // Only a write calls it, which is untracked already.
+    if (!auto) return;
     const page = paginationSlice.current();
     if (page.pageIndex !== 0) paginationSlice.set({ ...page, pageIndex: 0 });
   };
@@ -313,7 +319,28 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   const sortingSlice = slice("sorting", []);
   const filtersSlice = slice("columnFilters", [], resetPage);
   const globalSlice = slice("globalFilter", "", resetPage);
-  const paginationSlice = slice("pagination", { pageIndex: 0, pageSize: 10 });
+  const pagingSlice = slice("pagination", { pageIndex: 0, pageSize: 10 });
+  /**
+   * An uncontrolled pager meets a controlled filter or grouping without a write to hook: the table cannot see that
+   * signal change, so the page it shows is the first one while any of them differs from what it was when the page was
+   * last written, which is when the pager returns to the first page for an uncontrolled filter.
+   */
+  const pageNow = (): PaginationState => {
+    const page = pagingSlice.current();
+    return page.pageIndex !== 0 && [...seen].some(([read, value]) => read() !== value)
+      ? { ...page, pageIndex: 0 }
+      : page;
+  };
+  const paginationSlice: Slice<PaginationState> = {
+    ...pagingSlice,
+    current: pageNow,
+    set: untracked((value) => {
+      const next = typeof value === "function" ? value(pageNow()) : value;
+      for (const read of seen.keys()) seen.set(read, read());
+      pagingSlice.set(next);
+    }),
+  };
+  register("pagination", paginationSlice);
   // Every write goes through the slice, so the per-key flags can never disagree with the state.
   const selectionSlice = slice("rowSelection", {}, (next) => selectionFlags.sync(next));
   const selectionFlags = keyedFlags(untrack(selectionSlice.current), liveRowIds);
@@ -333,12 +360,14 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
    */
   const leavesUnder = new Map<Column<TData>, Column<TData>[]>();
   for (const leaf of leafColumns) {
-    let cursor: Column<TData> | undefined = leaf;
-    while (cursor !== undefined) {
-      const list = leavesUnder.get(cursor);
-      if (list === undefined) leavesUnder.set(cursor, [leaf]);
-      else list.push(leaf);
-      cursor = cursor.parent;
+    for (
+      let cursor: Column<TData> | undefined = leaf;
+      cursor !== undefined;
+      cursor = cursor.parent
+    ) {
+      const list = leavesUnder.get(cursor) ?? [];
+      list.push(leaf);
+      leavesUnder.set(cursor, list);
     }
   }
   /** The leaves a column's state applies to: its own leaves for a group, itself for a leaf. */
@@ -383,11 +412,8 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     const queue: { items: readonly TData[]; parent: Row<TData> | undefined; depth: number }[] = [
       { items: dataOf(), parent: undefined, depth: 0 },
     ];
-    let cursor = 0;
-    while (cursor < queue.length) {
-      const level = queue[cursor];
-      cursor += 1;
-      if (level === undefined) continue;
+    // The loop sees the levels pushed while it runs.
+    for (const level of queue) {
       level.items.forEach((original, index) => {
         const id = rowIdOf(original, index, level.parent);
         const children = options.getSubRows?.(original, index) ?? [];
@@ -399,8 +425,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
           parent: level.parent,
           subRows: [],
         });
-        if (level.parent === undefined) roots.push(row);
-        else (level.parent.subRows as Row<TData>[]).push(row);
+        (level.parent === undefined ? roots : (level.parent.subRows as Row<TData>[])).push(row);
         rowsById.set(id, row);
         if (children.length > 0)
           queue.push({ items: children, parent: row, depth: level.depth + 1 });
@@ -441,7 +466,10 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       groupingValue: init.groupingValue,
       getValue<TValue = unknown>(columnId: string): TValue {
         if (valueCache.has(columnId)) return valueCache.get(columnId) as TValue;
-        const value = valueOfCell(row, columnId);
+        // The accessor of the column, or for a grouped row what the grouping gives.
+        const value = row.isGrouped
+          ? hooks.groupValue(row, columnId)
+          : columnOf(columnId)?.accessorFn?.(row.original, row.index);
         valueCache.set(columnId, value);
         return value as TValue;
       },
@@ -470,20 +498,27 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
         return isSelected(row.id);
       },
       getIsSomeSelected(): boolean {
-        return row.subRows.some((child) => isSelected(child.id));
+        return someSelected(row.subRows);
       },
-      toggleSelected(value?: boolean): void {
+      toggleSelected: untracked((value?: boolean): void => {
         const next = value ?? !isSelected(row.id);
-        const targets: Row<TData>[] = [];
-        if (options.enableSubRowSelection === false) targets.push(row);
-        else walk([row], subRowsOf, (each) => targets.push(each));
         const map = { ...selectionSlice.current() } as Record<string, boolean>;
-        for (const target of targets) {
-          if (next) map[target.id] = true;
-          else delete map[target.id];
+        const mark = (id: string, on: boolean): void => {
+          if (on) map[id] = true;
+          else delete map[id];
+        };
+        if (options.enableSubRowSelection === false) mark(row.id, next);
+        else {
+          walk([row], subRowsOf, (each) => mark(each.id, next));
+          // A parent is selected exactly when every row under it is, so the rows above follow this one.
+          for (let up = init.parent; up !== undefined; up = up.getParentRow())
+            mark(
+              up.id,
+              up.subRows.every((child) => map[child.id] === true),
+            );
         }
         selectionSlice.set(map);
-      },
+      }),
       getCanExpand(): boolean {
         return hooks.canExpand(row);
       },
@@ -514,14 +549,6 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       return cell;
     }
     return row;
-  }
-
-  /** The value of a column for a row: its accessor, or for a grouped row what the grouping gives. */
-  function valueOfCell(row: Row<TData>, columnId: string): unknown {
-    if (row.isGrouped) return hooks.groupValue(row, columnId);
-    const column = columnOf(columnId);
-    if (column?.accessorFn === undefined) return undefined;
-    return column.accessorFn(row.original, row.index);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -577,14 +604,11 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
 
   /** Whether a row passes every test of a plan: all column filters, and any column for the global one. */
   const passesPlan = (row: Row<TData>, plan: FilterPlan<TData>): boolean => {
-    for (const test of plan.columns) if (!test(row)) return false;
-    if (plan.globalActive) {
-      const matched = plan.globalIds.some((id) =>
-        includesString(row.getValue(id), plan.global, hooks.fold),
-      );
-      if (!matched) return false;
-    }
-    return true;
+    return (
+      plan.columns.every((test) => test(row)) &&
+      (!plan.globalActive ||
+        plan.globalIds.some((id) => includesString(row.getValue(id), plan.global, hooks.fold)))
+    );
   };
 
   /**
@@ -600,12 +624,9 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       order.push(row);
     });
     // Children first: the reverse of the parents-first order.
-    for (let index = order.length - 1; index >= 0; index -= 1) {
-      const row = order[index];
-      if (row === undefined) continue;
+    for (const row of order.reverse())
       if (row.subRows.some((child) => kept.has(child.id)) || passesPlan(row, plan))
         kept.add(row.id);
-    }
     return kept;
   };
 
@@ -654,32 +675,25 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     const parts = entries.flatMap((entry) => {
       const column = columnOf(entry.id);
       if (column === undefined || column.columnDef.enableSorting === false) return [];
-      const custom = column.columnDef.sortingFn;
-      const compare: (a: Row<TData>, b: Row<TData>) => number =
-        typeof custom === "function"
-          ? (a, b) => (custom as SortingFn<TData>)(a, b, column.id)
-          : (a, b) => {
-              const va = a.getValue(column.id);
-              const vb = b.getValue(column.id);
-              if (isUnordered(va) || isUnordered(vb)) return 0;
-              return compareValues(va, vb, hooks.collate(custom === "basic"));
-            };
-      return [
-        { compare, missingAware: typeof custom !== "function", desc: entry.desc, id: column.id },
-      ];
+      return [{ id: column.id, desc: entry.desc, custom: column.columnDef.sortingFn }];
     });
     if (parts.length === 0) return undefined;
     return (a, b) => {
-      for (const part of parts) {
-        const va = a.getValue(part.id);
-        const vb = b.getValue(part.id);
-        if (part.missingAware && (isUnordered(va) || isUnordered(vb))) {
-          // Missing values, NaN and invalid dates go last whatever the direction.
-          if (isUnordered(va) && isUnordered(vb)) continue;
-          return isUnordered(va) ? 1 : -1;
+      for (const { id, desc, custom } of parts) {
+        let result: number;
+        if (typeof custom === "function") result = custom(a, b, id);
+        else {
+          const va = a.getValue(id);
+          const vb = b.getValue(id);
+          const missing = isUnordered(va);
+          if (missing || isUnordered(vb)) {
+            // Missing values, NaN and invalid dates go last whatever the direction.
+            if (missing && isUnordered(vb)) continue;
+            return missing ? 1 : -1;
+          }
+          result = compareValues(va, vb, hooks.collate(custom === "basic"));
         }
-        const result = part.compare(a, b);
-        if (result !== 0) return part.desc ? -result : result;
+        if (result !== 0) return desc ? -result : result;
       }
       return 0;
     };
@@ -709,6 +723,15 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   // ---------------------------------------------------------------------------------------------
   // Expansion and pagination
   // ---------------------------------------------------------------------------------------------
+  /** Whether any row at or under the given rows is selected (stops reading at the first one). */
+  function someSelected(rows: readonly Row<TData>[]): boolean {
+    let found = false;
+    walk(rows, subRowsOf, (row) => {
+      found ||= isSelected(row.id);
+    });
+    return found;
+  }
+
   function isSelected(id: string): boolean {
     if (selectionSlice.controlled) return selectionSlice.current()[id] === true;
     return selectionFlags.get(id);
@@ -799,28 +822,21 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   // ---------------------------------------------------------------------------------------------
   // The table
   // ---------------------------------------------------------------------------------------------
-  const table: Omit<Table<TData>, OwnedTableName> = {
+  const table: Omit<Table<TData>, OwnedTableName | CoreSliceMember> = {
     getState(): TableState {
-      // The keys of EMPTY are the slices, in the order the state is documented.
+      // The keys of EMPTY are the slices, in the order the state is documented; a slice whose feature is not installed
+      // reads as its empty value.
       return Object.fromEntries(
-        Object.keys(EMPTY).map((name) => [name, read(name as keyof TableState)]),
+        Object.keys(EMPTY).map((name) => {
+          const reader = members[name] as (() => unknown) | undefined;
+          return [name, reader === undefined ? EMPTY[name as keyof TableState] : reader()];
+        }),
       ) as unknown as TableState;
     },
-    sorting: sortingSlice.current,
-    columnFilters: filtersSlice.current,
-    globalFilter: globalSlice.current,
-    pagination: paginationSlice.current,
-    rowSelection: selectionSlice.current,
-
-    setSorting: sortingSlice.set,
-    setColumnFilters: filtersSlice.set,
-    setGlobalFilter: globalSlice.set,
-    setPagination: paginationSlice.set,
-    setRowSelection: selectionSlice.set,
     resetSorting: () => sortingSlice.set(initial.sorting ?? []),
     resetColumnFilters: () => filtersSlice.set(initial.columnFilters ?? []),
     resetGlobalFilter: () => globalSlice.set(initial.globalFilter ?? ""),
-    resetRowSelection: () => table.setRowSelection(initial.rowSelection ?? {}),
+    resetRowSelection: () => selectionSlice.set(initial.rowSelection ?? {}),
 
     getAllColumns: () => allColumns,
     getAllLeafColumns: () => leafColumns,
@@ -843,37 +859,36 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       const count = pageCountOf();
       return count < 0 || pageIndexOf() < count - 1;
     },
-    setPageIndex(index) {
+    setPageIndex: untracked((index: number): void => {
       const count = pageCountOf();
       const upper = count < 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, count - 1);
       // A NaN (an empty number input, `parseInt("")`) is the first page, never a NaN in the state.
       const clamped = Math.min(index > 0 ? Math.floor(index) : 0, upper);
       paginationSlice.set({ ...paginationSlice.current(), pageIndex: clamped });
-    },
-    setPageSize(size) {
+    }),
+    setPageSize: untracked((size: number): void => {
       const next = pageSizeOf(size);
       const current = paginationSlice.current();
       const firstRow = startOf(pageIndexOf(), pageSizeOf(current.pageSize));
       // An index past the one page of an `Infinity` size (written through `setPagination`) starts at no finite row: the
       // first page, never an `Infinity` or `NaN` index.
-      const pageIndex = Number.isFinite(firstRow) ? Math.floor(firstRow / next) : 0;
+      const pageIndex = firstRow < Infinity ? Math.floor(firstRow / next) : 0;
       paginationSlice.set({ pageIndex, pageSize: next });
-    },
-    previousPage: () => table.setPageIndex(pageIndexOf() - 1),
-    nextPage: () => table.setPageIndex(pageIndexOf() + 1),
+    }),
+    previousPage: untracked(() => table.setPageIndex(pageIndexOf() - 1)),
+    nextPage: untracked(() => table.setPageIndex(pageIndexOf() + 1)),
     firstPage: () => table.setPageIndex(0),
-    lastPage: () => table.setPageIndex(Math.max(0, pageCountOf() - 1)),
+    lastPage: untracked(() => table.setPageIndex(Math.max(0, pageCountOf() - 1))),
 
     getIsAllRowsSelected(): boolean {
       const roots = coreTree().roots;
-      if (roots.length === 0) return false;
-      return roots.every((row) => isSelected(row.id));
+      return roots.length > 0 && roots.every((row) => isSelected(row.id));
     },
     getIsSomeRowsSelected(): boolean {
-      const roots = coreTree().roots;
-      return roots.some((row) => isSelected(row.id)) && !table.getIsAllRowsSelected();
+      // Some row at any depth: a lone selected child counts, though no root row is selected.
+      return !table.getIsAllRowsSelected() && someSelected(coreTree().roots);
     },
-    toggleAllRowsSelected(value) {
+    toggleAllRowsSelected: untracked((value?: boolean): void => {
       const next = value ?? !table.getIsAllRowsSelected();
       const map: Record<string, boolean> = {};
       if (next) {
@@ -881,8 +896,8 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
           map[row.id] = true;
         });
       }
-      table.setRowSelection(map);
-    },
+      selectionSlice.set(map);
+    }),
   };
 
   // Column methods of the core: sorting, and the column and global filters.
@@ -898,37 +913,30 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       },
       getFirstSortDir: (): "asc" | "desc" =>
         column.columnDef.sortDescFirst === true ? "desc" : "asc",
-      toggleSorting: (desc?: boolean, multi?: boolean): void => {
+      toggleSorting: untracked((desc?: boolean, multi?: boolean): void => {
         const current = sortingSlice.current();
         const existing = current.find((item) => item.id === column.id);
         const first = column.columnDef.sortDescFirst === true;
-        let nextEntry: SortingEntry | undefined;
-        if (desc !== undefined) nextEntry = { id: column.id, desc };
-        else if (existing === undefined) nextEntry = { id: column.id, desc: first };
-        else if (existing.desc === first) nextEntry = { id: column.id, desc: !first };
-        else nextEntry = undefined;
-        const others = current.filter((item) => item.id !== column.id);
-        const keep = multi === true && column.columnDef.enableMultiSort !== false;
-        const base: SortingEntry[] = keep ? [...others] : [];
-        if (nextEntry !== undefined) {
-          if (keep && existing !== undefined) {
-            sortingSlice.set(
-              current.map((item) => (item.id === column.id && nextEntry ? nextEntry : item)),
-            );
-            return;
-          }
-          base.push(nextEntry);
-        }
-        sortingSlice.set(base);
-      },
+        // `undefined` removes the column from the sorting.
+        const next =
+          desc ?? (existing === undefined ? first : existing.desc === first ? !first : undefined);
+        const entry: SortingEntry[] = next === undefined ? [] : [{ id: column.id, desc: next }];
+        sortingSlice.set(
+          multi === true && column.columnDef.enableMultiSort !== false
+            ? existing === undefined
+              ? [...current, ...entry]
+              : current.flatMap((item) => (item.id === column.id ? entry : [item]))
+            : entry,
+        );
+      }),
       getCanFilter: (): boolean =>
         column.columnDef.enableColumnFilter !== false && column.columns.length === 0,
       getFilterValue: (): unknown =>
         filtersSlice.current().find((item) => item.id === column.id)?.value,
-      setFilterValue: (value: unknown): void => {
+      setFilterValue: untracked((value: unknown): void => {
         const others = filtersSlice.current().filter((item) => item.id !== column.id);
         filtersSlice.set(isFilterActive(value) ? [...others, { id: column.id, value }] : others);
-      },
+      }),
       getCanGlobalFilter: (): boolean =>
         column.columnDef.enableGlobalFilter !== false && column.columns.length === 0,
     });
@@ -971,7 +979,11 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     const known = chosen.get(feature.name);
     if (known === feature) continue;
     if (known !== undefined) {
-      throw new TypeError(`[shadow-table] two different "${feature.name}" features were passed.`);
+      throw new TypeError(
+        __DEV__
+          ? `[shadow-table] two different "${feature.name}" features were passed.`
+          : `TABLE_DUPLICATE ${feature.name}`,
+      );
     }
     chosen.set(feature.name, feature);
   }
@@ -985,7 +997,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   if (options.locale !== undefined && !chosen.has("locale"))
     throw featureMissing("locale", "locale");
   for (const feature of chosen.values()) feature.install(host);
-  return complete;
+  return Object.assign(complete, members);
 }
 
 /**

@@ -131,7 +131,9 @@ export type ColumnFiltersState = readonly ColumnFilterEntry[];
 export interface PaginationState {
   /**
    * The page shown, from 0. `setPageIndex` and the page actions keep it between 0 and the last page;
-   * `setPagination` writes it as given, and a page past the end shows no rows.
+   * `setPagination` writes it as given, and a page past the end shows no rows. An uncontrolled pager
+   * returns to page 0 when the column filters, the global filter or the grouping change, controlled
+   * or not; a controlled pager and `manualPagination` leave the page to the caller.
    */
   readonly pageIndex: number;
   /**
@@ -1146,11 +1148,12 @@ export interface Row<TData> {
    * flag changes.
    */
   getIsSelected(): boolean;
-  /** Whether any of the row's direct sub rows is selected. */
+  /** Whether any row under this one, at any depth, is selected. */
   getIsSomeSelected(): boolean;
   /**
    * Selects or deselects the row and every row under it (only the row itself when
-   * `enableSubRowSelection` is `false`).
+   * `enableSubRowSelection` is `false`). The rows above it follow: a parent is selected exactly when
+   * every one of its sub rows is. Runs untracked.
    * @param value `true` to select, `false` to deselect; omitted, the row's selection flips.
    */
   toggleSelected(value?: boolean): void;
@@ -1687,7 +1690,7 @@ export interface Table<TData> {
 
   /** Whether every root row is selected; `false` when there are no rows. */
   getIsAllRowsSelected(): boolean;
-  /** Whether some root rows are selected, but not all. */
+  /** Whether some rows are selected at any depth, but not every root row. */
   getIsSomeRowsSelected(): boolean;
   /**
    * Selects every row made from the data, at every depth, or clears the selection.

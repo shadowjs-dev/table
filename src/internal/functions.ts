@@ -63,12 +63,12 @@ export function arrayIncludes(value: unknown, filter: unknown): boolean {
  * number leaves that side open.
  * @param value The cell value.
  * @param filter The `[min, max]` tuple.
- * @returns Whether the value passes; `false` for a value that is not a number or a filter that is
- *   not an array.
+ * @returns Whether the value passes; `false` for a value that is not a number (`NaN` included) or a
+ *   filter that is not an array.
  * @internal
  */
 export function inNumberRange(value: unknown, filter: unknown): boolean {
-  if (typeof value !== "number" || !Array.isArray(filter)) return false;
+  if (typeof value !== "number" || Number.isNaN(value) || !Array.isArray(filter)) return false;
   const [min, max] = filter as [unknown, unknown];
   if (typeof min === "number" && value < min) return false;
   if (typeof max === "number" && value > max) return false;
@@ -173,6 +173,20 @@ export function compareValues(
 }
 
 /**
+ * The smallest and the largest of a list, found with a loop: `Math.min(...list)` throws a `RangeError` for a very large
+ * list (the arguments go on the call stack). `NaN` poisons both, as it does with `Math.min`.
+ */
+function bounds(numbers: readonly number[]): [number, number] {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const value of numbers) {
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  return [min, max];
+}
+
+/**
  * The aggregation of a group's leaf values: a custom function's result, or the built-in aggregation
  * of that name (see `AggregationFnName`).
  * @param values The leaf values.
@@ -188,9 +202,9 @@ export function aggregate(values: readonly unknown[], fn: AggregationFn): unknow
     case "sum":
       return numbers.reduce((total, value) => total + value, 0);
     case "min":
-      return numbers.length === 0 ? undefined : Math.min(...numbers);
+      return numbers.length === 0 ? undefined : bounds(numbers)[0];
     case "max":
-      return numbers.length === 0 ? undefined : Math.max(...numbers);
+      return numbers.length === 0 ? undefined : bounds(numbers)[1];
     case "mean":
       return numbers.length === 0
         ? undefined
@@ -210,7 +224,7 @@ export function aggregate(values: readonly unknown[], fn: AggregationFn): unknow
     case "uniqueCount":
       return new Set(values).size;
     case "extent":
-      return numbers.length === 0 ? undefined : [Math.min(...numbers), Math.max(...numbers)];
+      return numbers.length === 0 ? undefined : bounds(numbers);
     default:
       return undefined;
   }

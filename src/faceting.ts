@@ -4,9 +4,10 @@
  * column throw a `TypeError` that names the feature.
  * @packageDocumentation
  */
+import { useMemo } from "@shadow-js/core";
 import type { TableHost } from "./internal/host";
 import { subRowsOf, walk } from "./internal/tree";
-import type { Column, Row, TableFeature } from "./types";
+import type { Row, TableFeature } from "./types";
 
 /**
  * The `faceting` feature: the values a filter would leave, for filter widgets. Each facet ignores the
@@ -37,40 +38,36 @@ import type { Column, Row, TableFeature } from "./types";
 export const faceting: TableFeature<"faceting"> = {
   name: "faceting",
   install<TData>(host: TableHost<TData>): void {
-    // Every kept row of the tree, once; the column's own filter is left out.
-    const eachKept = (column: Column<TData>, visit: (row: Row<TData>) => void): void => {
-      const kept = host.keepFor(column.id);
-      walk(host.core().roots, subRowsOf, (row) => {
-        if (kept.has(row.id)) visit(row);
-      });
-    };
     for (const column of host.columns) {
-      Object.assign(column, {
-        getFacetedRowModel: (): readonly Row<TData>[] => {
-          const kept = host.keepFor(column.id);
-          return host.core().roots.filter((row) => kept.has(row.id));
-        },
-        getFacetedUniqueValues: (): Map<unknown, number> => {
-          const counts = new Map<unknown, number>();
-          eachKept(column, (row) => {
-            if (row.subRows.length > 0) return;
-            const value = row.getValue(column.id);
-            counts.set(value, (counts.get(value) ?? 0) + 1);
-          });
-          return counts;
-        },
-        getFacetedMinMaxValues: (): [number, number] | undefined => {
-          let min: number | undefined;
-          let max: number | undefined;
-          eachKept(column, (row) => {
+      // One lazy memo per column, made here so the table's owner holds it: it reads the data, the filters and the
+      // grouping, so reading a facet again, from any number of readers, runs no filter again. The column's own filter is
+      // left out.
+      const facets = useMemo(
+        () => {
+          const keep = host.keepFor(column.id);
+          const roots: Row<TData>[] = [];
+          const unique = new Map<unknown, number>();
+          let range: [number, number] | undefined;
+          walk(host.core().roots, subRowsOf, (row) => {
+            if (!keep.has(row.id)) return;
+            if (row.depth === 0) roots.push(row);
             const value = row.getValue(column.id);
             // NaN would make both bounds NaN for good (`Math.min(x, NaN)` is NaN).
-            if (typeof value !== "number" || Number.isNaN(value)) return;
-            min = min === undefined ? value : Math.min(min, value);
-            max = max === undefined ? value : Math.max(max, value);
+            if (typeof value === "number" && !Number.isNaN(value))
+              range =
+                range === undefined
+                  ? [value, value]
+                  : [Math.min(range[0], value), Math.max(range[1], value)];
+            if (row.subRows.length === 0) unique.set(value, (unique.get(value) ?? 0) + 1);
           });
-          return min === undefined || max === undefined ? undefined : [min, max];
+          return { roots, unique, range };
         },
+        { lazy: true },
+      );
+      Object.assign(column, {
+        getFacetedRowModel: () => facets().roots,
+        getFacetedUniqueValues: () => facets().unique,
+        getFacetedMinMaxValues: () => facets().range,
       });
     }
   },

@@ -37,12 +37,8 @@ import type { TableFeature } from "./types";
 export const ordering: TableFeature<"ordering"> = {
   name: "ordering",
   install<TData>(host: TableHost<TData>): void {
-    const { table, hooks } = host;
+    const { hooks } = host;
     const orderSlice = host.slice("columnOrder", []);
-    Object.assign(table, {
-      columnOrder: orderSlice.current,
-      setColumnOrder: orderSlice.set,
-    });
     hooks.ordered = () => {
       const order = orderSlice.current();
       const rank = new Map(order.map((id, index) => [id, index] as const));

@@ -4,10 +4,10 @@
  * root rows, and the expansion members throw a `TypeError` that names the feature.
  * @packageDocumentation
  */
-import { untrack } from "@shadow-js/core";
-import type { TableHost } from "./internal/host";
+import { untrack, useMemo } from "@shadow-js/core";
+import { type TableHost, untracked } from "./internal/host";
 import { keyedFlags } from "./internal/keyed";
-import { subRowsOf, walk } from "./internal/tree";
+import { walk } from "./internal/tree";
 import type { TableFeature } from "./types";
 
 /**
@@ -51,17 +51,22 @@ export const expanding: TableFeature<"expanding"> = {
     const started = untrack(expandedSlice.current);
     const flags = keyedFlags(started === true ? {} : started, host.liveRowIds);
 
+    /** Whether every row is expanded: a memo, so the readers of one row hear of nothing else. */
+    const all = useMemo(() => expandedSlice.current() === true);
+
     /** Whether a row is expanded: from its own flag when the state is uncontrolled. */
     const isExpanded = (id: string): boolean => {
-      const state = expandedSlice.current();
-      if (expandedSlice.controlled || state === true) return state === true || state[id] === true;
-      return flags.get(id);
+      if (all()) return true;
+      // Not "every row", so the state is the map.
+      return expandedSlice.controlled
+        ? (expandedSlice.current() as Record<string, boolean>)[id] === true
+        : flags.get(id);
     };
 
     hooks.expands = hooks.isExpanded = (row) => isExpanded(row.id);
     hooks.canExpand = (row) =>
       host.grouped().childrenOf(row).length > 0 && options.enableExpanding !== false;
-    hooks.toggleRow = (row, value) => {
+    hooks.toggleRow = untracked((row, value) => {
       const next = value ?? !isExpanded(row.id);
       const current = expandedSlice.current();
       const base: Record<string, boolean> = {};
@@ -73,24 +78,17 @@ export const expanding: TableFeature<"expanding"> = {
         });
       } else Object.assign(base, current);
       expandedSlice.set({ ...base, [row.id]: next });
-    };
+    });
 
     Object.assign(table, {
-      expanded: expandedSlice.current,
-      setExpanded: expandedSlice.set,
       resetExpanded: (): void => table.setExpanded(initial.expanded ?? {}),
-      getIsAllRowsExpanded: (): boolean => expandedSlice.current() === true,
-      getCanSomeRowsExpand: (): boolean => {
-        let any = false;
-        walk(host.core().roots, subRowsOf, (row) => {
-          if (row.subRows.length > 0) any = true;
-        });
-        return any;
-      },
-      toggleAllRowsExpanded: (value?: boolean): void => {
-        const next = value ?? expandedSlice.current() !== true;
+      getIsAllRowsExpanded: all,
+      getCanSomeRowsExpand: (): boolean =>
+        [...host.core().rowsById.values()].some((row) => row.subRows.length > 0),
+      toggleAllRowsExpanded: untracked((value?: boolean): void => {
+        const next = value ?? !all();
         table.setExpanded(next ? true : {});
-      },
+      }),
     });
   },
 };

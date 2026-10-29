@@ -5,7 +5,7 @@ description: "Work with @shadow-js/table. A headless data table with sorting, fi
 
 # @shadow-js/table
 
-Version 1.0.2. A headless data table with sorting, filtering, pagination, selection and grouping.
+Version 1.0.3. A headless data table with sorting, filtering, pagination, selection and grouping.
 
 ## Where to read more
 
@@ -23,8 +23,8 @@ npm install @shadow-js/table @shadow-js/core @shadow-js/web
 
 | Package | Range | Required |
 | --- | --- | --- |
-| `@shadow-js/core` | `^1.0.2` | yes |
-| `@shadow-js/web` | `^1.0.2` | yes |
+| `@shadow-js/core` | `^1.0.3` | yes |
+| `@shadow-js/web` | `^1.0.3` | yes |
 
 ## Import paths
 

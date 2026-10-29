@@ -68,6 +68,7 @@ A production build keeps a short code instead of the development explanation, so
 | Code | Development explanation |
 | --- | --- |
 | `TABLE_FEATURE` | … needs the … feature: import { … } from "@shadow-js/table/…" and pass createTable({ features: […] }), or use the full list from "@shadow-js/table/full". |
+| `TABLE_DUPLICATE` | two different "…" features were passed. |
 | `TABLE_LOCALE` | the locale feature needs the locale option: createTable({ features: [locale], locale: "de" }). |
 
 ## Dependencies

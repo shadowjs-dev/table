@@ -37,17 +37,13 @@ import type { TableFeature } from "./types";
 export const sizing: TableFeature<"sizing"> = {
   name: "sizing",
   install<TData>(host: TableHost<TData>): void {
-    const { table, hooks } = host;
+    const { hooks } = host;
     const sizingSlice = host.slice("columnSizing", {});
     hooks.size = (column) =>
       sizeOfDef(
         column.columnDef,
         sizingSlice.current()[column.id] ?? column.columnDef.size ?? host.defaultSize,
       );
-    Object.assign(table, {
-      columnSizing: sizingSlice.current,
-      setColumnSizing: sizingSlice.set,
-    });
     for (const column of host.columns) {
       Object.assign(column, {
         getCanResize: (): boolean => column.columnDef.enableResizing !== false,
