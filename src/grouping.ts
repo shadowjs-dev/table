@@ -47,7 +47,10 @@ export const grouping: TableFeature<"grouping"> = {
   install<TData>(host: TableHost<TData>): void {
     const { table, options, hooks } = host;
     const slice = host.slice("grouping", [], host.resetPage);
-    const groupedModel = host.model(() => treeModel(host.grouped()), "grouped");
+    const groupedModel = host.model(
+      () => treeModel(host.grouped()),
+      __DEV__ ? "model.grouped" : undefined,
+    );
     Object.assign(table, {
       grouping: slice.current,
       setGrouping: slice.set,
@@ -65,43 +68,60 @@ export const grouping: TableFeature<"grouping"> = {
         taken.add(candidate);
         return candidate;
       };
-      const build = (
+      /** A group waiting to be made: its rows, the level it groups by, the id prefix, the array it joins and its value. */
+      type Pending = readonly [Row<TData>[], number, string, Row<TData>[], unknown];
+      const pending: Pending[] = [];
+      /**
+       * Splits `members` by the value of the column at `level`: one pending group per value, in the order the values first
+       * appear. Past the last grouped column the members themselves are the rows. The ids are given when a group is made, in
+       * depth-first order, so a suffix for a clash lands on the same group as with a recursive build (the depth is the number
+       * of grouped columns, which the app chooses, so there is no recursion).
+       */
+      const split = (
         members: readonly Row<TData>[],
         level: number,
         prefix: string,
-      ): Row<TData>[] => {
-        const columnId = columnIds[level];
-        if (columnId === undefined) return [...members];
+        into: Row<TData>[],
+      ): void => {
+        if (columnIds[level] === undefined) {
+          for (const member of members) into.push(member);
+          return;
+        }
         const buckets = new Map<unknown, Row<TData>[]>();
         for (const member of members) {
-          const value = member.getValue(columnId);
+          const value = member.getValue(columnIds[level]);
           const bucket = buckets.get(value);
           if (bucket === undefined) buckets.set(value, [member]);
           else bucket.push(member);
         }
-        const groups: Row<TData>[] = [];
-        for (const [value, bucket] of buckets) {
-          const first = bucket[0];
-          if (first === undefined) continue;
-          const id = idFor(`${prefix}${columnId}:${String(value)}`);
-          groups.push(
-            host.makeRow({
-              id,
-              index: first.index,
-              depth: level,
-              original: first.original,
-              parent: undefined,
-              subRows: build(bucket, level + 1, `${id}>`),
-              isGrouped: true,
-              groupingColumnId: columnId,
-              groupingValue: value,
-            }),
-          );
-        }
-        return groups;
+        // The stack pops the last first: reversed, the groups are made in order.
+        for (const [value, bucket] of [...buckets].reverse())
+          pending.push([bucket, level, prefix, into, value]);
       };
+      const roots: Row<TData>[] = [];
+      split(filtered.roots, 0, "", roots);
+      for (let group = pending.pop(); group !== undefined; group = pending.pop()) {
+        const [bucket, level, prefix, into, value] = group;
+        const first = bucket[0];
+        if (first === undefined) continue;
+        const columnId = columnIds[level];
+        const id = idFor(`${prefix}${columnId}:${String(value)}`);
+        const subRows: Row<TData>[] = [];
+        into.push(
+          host.makeRow({
+            id,
+            index: first.index,
+            depth: level,
+            original: first.original,
+            subRows,
+            groupingColumnId: columnId,
+            groupingValue: value,
+          }),
+        );
+        split(bucket, level + 1, `${id}>`, subRows);
+      }
       return {
-        roots: build(filtered.roots, 0, ""),
+        roots,
         childrenOf: (row) => (row.isGrouped ? row.subRows : filtered.childrenOf(row)),
       };
     };

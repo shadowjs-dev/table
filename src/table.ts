@@ -15,7 +15,7 @@ import {
   compareValues,
   filterByName,
   includesString,
-  isMissing,
+  isUnordered,
 } from "./internal/functions";
 import {
   type CoreRows,
@@ -70,99 +70,113 @@ const EMPTY: TableState = {
   grouping: [],
 };
 
-/** The state slices a feature owns, and the feature that owns each. A table that starts from one needs it. */
-const STATE_OWNER: readonly (readonly [keyof TableState, TableFeatureName])[] = [
-  ["grouping", "grouping"],
-  ["expanded", "expanding"],
-  ["columnPinning", "pinning"],
-  ["columnSizing", "sizing"],
-  ["columnVisibility", "visibility"],
-  ["columnOrder", "ordering"],
-];
-
-/** The table members each feature owns: they exist from the start and throw until the feature is installed. */
-const OWNED_TABLE = [
-  ["grouping", ["grouping", "setGrouping", "getGroupedRowModel"]],
-  [
-    "expanding",
-    [
-      "expanded",
-      "setExpanded",
-      "resetExpanded",
-      "getIsAllRowsExpanded",
-      "getCanSomeRowsExpand",
-      "toggleAllRowsExpanded",
-    ],
-  ],
-  [
-    "pinning",
-    [
-      "columnPinning",
-      "setColumnPinning",
-      "getLeftLeafColumns",
-      "getCenterLeafColumns",
-      "getRightLeafColumns",
-    ],
-  ],
-  ["sizing", ["columnSizing", "setColumnSizing"]],
-  ["layout", ["getHeaderGroups", "getTotalSize"]],
-  ["visibility", ["columnVisibility", "setColumnVisibility"]],
-  ["ordering", ["columnOrder", "setColumnOrder"]],
-] as const;
+/**
+ * The table members each feature owns, one group per feature: the feature, then its members. They
+ * exist from the start and throw until the feature is installed.
+ */
+const OWNED_TABLE =
+  "grouping grouping setGrouping getGroupedRowModel," +
+  "expanding expanded setExpanded resetExpanded getIsAllRowsExpanded getCanSomeRowsExpand toggleAllRowsExpanded," +
+  "pinning columnPinning setColumnPinning getLeftLeafColumns getCenterLeafColumns getRightLeafColumns," +
+  "sizing columnSizing setColumnSizing," +
+  "layout getHeaderGroups getTotalSize," +
+  "visibility columnVisibility setColumnVisibility," +
+  "ordering columnOrder setColumnOrder";
 
 /** The column members each feature owns (see {@link OWNED_TABLE}). */
-const OWNED_COLUMN = [
-  ["grouping", ["getCanGroup", "getIsGrouped", "toggleGrouping"]],
-  ["pinning", ["getIsPinned", "getCanPin", "pin"]],
-  ["sizing", ["getCanResize"]],
-  ["layout", ["getStart"]],
-  ["faceting", ["getFacetedRowModel", "getFacetedUniqueValues", "getFacetedMinMaxValues"]],
-  ["visibility", ["getIsVisible", "getCanHide", "toggleVisibility"]],
-] as const;
+const OWNED_COLUMN =
+  "grouping getCanGroup getIsGrouped toggleGrouping," +
+  "pinning getIsPinned getCanPin pin," +
+  "sizing getCanResize," +
+  "layout getStart," +
+  "faceting getFacetedRowModel getFacetedUniqueValues getFacetedMinMaxValues," +
+  "visibility getIsVisible getCanHide toggleVisibility";
 
 /** Something both a column and a row can be asked for by id. */
 type Lookup<TData> = Map<string, Column<TData>>;
 
 /** The table members the features own (the names only), so the core literal leaves them out. */
-type OwnedTableName = (typeof OWNED_TABLE)[number][1][number];
+type OwnedTableName =
+  | "grouping"
+  | "setGrouping"
+  | "getGroupedRowModel"
+  | "expanded"
+  | "setExpanded"
+  | "resetExpanded"
+  | "getIsAllRowsExpanded"
+  | "getCanSomeRowsExpand"
+  | "toggleAllRowsExpanded"
+  | "columnPinning"
+  | "setColumnPinning"
+  | "getLeftLeafColumns"
+  | "getCenterLeafColumns"
+  | "getRightLeafColumns"
+  | "columnSizing"
+  | "setColumnSizing"
+  | "getHeaderGroups"
+  | "getTotalSize"
+  | "columnVisibility"
+  | "setColumnVisibility"
+  | "columnOrder"
+  | "setColumnOrder";
 
-/** The members a list of owned names needs, each a function that throws the feature error. */
+/**
+ * The members a list of owned names needs, each a function that throws the feature error. A name that
+ * is a state slice (a key of {@link EMPTY}) is recorded in `owners` with the feature that owns it: a
+ * table that starts from that state needs the feature.
+ */
 function absentMembers(
-  owned: readonly (readonly [TableFeatureName, readonly string[]])[],
+  owned: string,
   prefix: string,
+  owners?: Map<string, TableFeatureName>,
 ): Record<string, () => never> {
   const out: Record<string, () => never> = {};
-  for (const [feature, names] of owned) {
-    for (const name of names) out[name] = absent(feature, `${prefix}.${name}`);
+  for (const group of owned.split(",")) {
+    const [feature, ...names] = group.split(" ") as [TableFeatureName, ...string[]];
+    for (const name of names) {
+      out[name] = absent(feature, `${prefix}.${name}`);
+      if (name in EMPTY) owners?.set(name, feature);
+    }
   }
   return out;
 }
 
 /**
- * The column definitions flattened to columns, each knowing its parent and its children. `out`
- * receives every column at every depth, parents before their children; the return value is the
- * columns made at this level only.
+ * The column definitions flattened to columns, each knowing its parent and its children. `out` receives every column at
+ * every depth, parents before their children. Iterative: how deep column groups nest is the app's choice, so it must not
+ * be a limit of the call stack. A work item is a definition, its parent and the array the column joins; an item without a
+ * definition marks its column complete, which is when its id is registered (after its children's).
  */
 function buildColumns<TData>(
   defs: readonly ColumnDef<TData>[],
-  parent: Column<TData> | undefined,
-  depth: number,
   out: Column<TData>[],
   lookup: Lookup<TData>,
-): Column<TData>[] {
-  const made: Column<TData>[] = [];
-  for (const def of defs) {
-    const children: Column<TData>[] = [];
-    const id = def.id ?? accessorKeyOf(def) ?? "";
-    const column = createColumn(def, id, parent, depth, children);
-    out.push(column);
-    if ("columns" in def) {
-      children.push(...buildColumns(def.columns, column, depth + 1, out, lookup));
+): void {
+  type Work = readonly [ColumnDef<TData> | undefined, Column<TData> | undefined, Column<TData>[]];
+  const stack: Work[] = [];
+  // The stack pops the last pushed, so a list goes in reversed to be made in order.
+  const queue = (
+    list: readonly ColumnDef<TData>[],
+    parent: Column<TData> | undefined,
+    into: Column<TData>[],
+  ) => {
+    for (const def of [...list].reverse()) stack.push([def, parent, into]);
+  };
+  queue(defs, undefined, []);
+  for (let work = stack.pop(); work !== undefined; work = stack.pop()) {
+    const [def, parent, into] = work;
+    if (def === undefined) {
+      if (parent !== undefined && parent.id !== "") lookup.set(parent.id, parent);
+      continue;
     }
-    made.push(column);
-    if (column.id !== "") lookup.set(column.id, column);
+    const children: Column<TData>[] = [];
+    const depth = parent === undefined ? 0 : parent.depth + 1;
+    const column = createColumn(def, def.id ?? accessorKeyOf(def) ?? "", parent, depth, children);
+    out.push(column);
+    into.push(column);
+    stack.push([undefined, column, children]);
+    if ("columns" in def) queue(def.columns, column, children);
   }
-  return made;
 }
 
 /** The key a column reads, when it has one. */
@@ -302,14 +316,14 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   const paginationSlice = slice("pagination", { pageIndex: 0, pageSize: 10 });
   // Every write goes through the slice, so the per-key flags can never disagree with the state.
   const selectionSlice = slice("rowSelection", {}, (next) => selectionFlags.sync(next));
-  const selectionFlags = keyedFlags(untrack(selectionSlice.current));
+  const selectionFlags = keyedFlags(untrack(selectionSlice.current), liveRowIds);
 
   // ---------------------------------------------------------------------------------------------
   // Columns
   // ---------------------------------------------------------------------------------------------
   const allColumns: Column<TData>[] = [];
   const lookup: Lookup<TData> = new Map();
-  buildColumns(options.columns, undefined, 0, allColumns, lookup);
+  buildColumns(options.columns, allColumns, lookup);
   const leafColumns = allColumns.filter((column) => column.columns.length === 0);
   const columnOf = (id: string): Column<TData> | undefined => lookup.get(id);
 
@@ -384,9 +398,6 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
           original,
           parent: level.parent,
           subRows: [],
-          isGrouped: false,
-          groupingColumnId: undefined,
-          groupingValue: undefined,
         });
         if (level.parent === undefined) roots.push(row);
         else (level.parent.subRows as Row<TData>[]).push(row);
@@ -398,7 +409,21 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     return { roots, rowsById };
   };
 
-  const coreTree = useMemo(buildCore, { lazy: true, name: "table.core" });
+  /** A memo computed on first read. The name is a development label only: production passes none. */
+  const lazy = <T>(build: () => T, name?: string): Accessor<T> =>
+    useMemo(build, __DEV__ ? { lazy: true, name: `table.${name}` } : { lazy: true });
+
+  const coreTree = lazy(buildCore, __DEV__ ? "core" : undefined);
+
+  /** The ids a row can have now: the data's rows, and the group rows of the grouping. */
+  function liveRowIds(): ReadonlySet<string> {
+    const ids = new Set(coreTree().rowsById.keys());
+    const shown = groupedView();
+    walk(shown.roots, shown.childrenOf, (row) => {
+      ids.add(row.id);
+    });
+    return ids;
+  }
 
   /** One row object: values, cells, selection and expansion, bound to this table. */
   function makeRow(init: RowInit<TData>): Row<TData> {
@@ -411,7 +436,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       original: init.original,
       parentId: init.parent?.id,
       subRows: init.subRows,
-      isGrouped: init.isGrouped,
+      isGrouped: init.groupingColumnId !== undefined,
       groupingColumnId: init.groupingColumnId,
       groupingValue: init.groupingValue,
       getValue<TValue = unknown>(columnId: string): TValue {
@@ -424,13 +449,13 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
         return row.getValue(columnId);
       },
       getIsGrouped(): boolean {
-        return init.isGrouped;
+        return row.isGrouped;
       },
       getAllCells(): readonly Cell<TData>[] {
-        return leafColumns.map((column) => cellFor(column));
+        return leafColumns.map(cellFor);
       },
       getVisibleCells(): readonly Cell<TData>[] {
-        return visibleLeaves().map((column) => cellFor(column));
+        return visibleLeaves().map(cellFor);
       },
       getLeafRows(): readonly Row<TData>[] {
         return leavesOf(row, groupedView().childrenOf);
@@ -474,21 +499,15 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     function cellFor(column: Column<TData>): Cell<TData> {
       const known = cellCache.get(column.id);
       if (known !== undefined) return known;
+      const getValue = (): unknown => row.getValue(column.id);
       const cell: Cell<TData> = {
         id: `${row.id}_${column.id}`,
         column,
         row,
-        getValue: () => row.getValue(column.id),
-        renderValue: () => row.getValue(column.id),
+        getValue,
+        renderValue: getValue,
         getContext(): CellContext<TData, unknown> {
-          return {
-            table: complete,
-            column,
-            row,
-            cell,
-            getValue: cell.getValue,
-            renderValue: cell.renderValue,
-          };
+          return { table: complete, column, row, cell, getValue, renderValue: getValue };
         },
       };
       cellCache.set(column.id, cell);
@@ -591,17 +610,17 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   };
 
   /** The kept ids for the rows shown: every row with manual filtering (the server filtered them). */
-  const filteredKept = useMemo(
+  const filteredKept = lazy(
     (): Set<string> =>
       options.manualFiltering === true ? new Set(coreTree().rowsById.keys()) : keepFor(undefined),
-    { lazy: true, name: "table.filtered" },
+    __DEV__ ? "filtered" : undefined,
   );
 
   /**
    * The core rows the filters keep, as a tree: each kept row has the kept rows among its sub rows,
    * so a row that does not pass is not shown with its siblings.
    */
-  const filteredView = useMemo(
+  const filteredView = lazy(
     (): View<TData> => {
       const roots = coreTree().roots;
       const kept = filteredKept();
@@ -617,14 +636,14 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
         childrenOf: (row) => children.get(row.id) ?? NO_ROWS,
       };
     },
-    { lazy: true, name: "table.filteredView" },
+    __DEV__ ? "filteredView" : undefined,
   );
 
   /** The tree the rows are shown in: the filtered rows, reshaped by the grouping hook (identity without it). */
-  const groupedView = useMemo((): View<TData> => hooks.group(filteredView()), {
-    lazy: true,
-    name: "table.grouped",
-  });
+  const groupedView = lazy(
+    (): View<TData> => hooks.group(filteredView()),
+    __DEV__ ? "grouped" : undefined,
+  );
 
   // ---------------------------------------------------------------------------------------------
   // Sorting
@@ -642,7 +661,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
           : (a, b) => {
               const va = a.getValue(column.id);
               const vb = b.getValue(column.id);
-              if (isMissing(va) || isMissing(vb)) return 0;
+              if (isUnordered(va) || isUnordered(vb)) return 0;
               return compareValues(va, vb, hooks.collate(custom === "basic"));
             };
       return [
@@ -654,10 +673,10 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       for (const part of parts) {
         const va = a.getValue(part.id);
         const vb = b.getValue(part.id);
-        if (part.missingAware && (isMissing(va) || isMissing(vb))) {
-          // Missing values go last whatever the direction.
-          if (isMissing(va) && isMissing(vb)) continue;
-          return isMissing(va) ? 1 : -1;
+        if (part.missingAware && (isUnordered(va) || isUnordered(vb))) {
+          // Missing values, NaN and invalid dates go last whatever the direction.
+          if (isUnordered(va) && isUnordered(vb)) continue;
+          return isUnordered(va) ? 1 : -1;
         }
         const result = part.compare(a, b);
         if (result !== 0) return part.desc ? -result : result;
@@ -670,7 +689,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
    * The grouped tree sorted at every depth: the roots, and the children of each row, in order. The
    * sort is stable, so rows that compare equal keep their order.
    */
-  const sortedView = useMemo(
+  const sortedView = lazy(
     (): View<TData> => {
       const grouped = groupedView();
       const compare =
@@ -684,7 +703,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       });
       return { roots, childrenOf: (row) => children.get(row.id) ?? NO_ROWS };
     },
-    { lazy: true, name: "table.sorted" },
+    __DEV__ ? "sorted" : undefined,
   );
 
   // ---------------------------------------------------------------------------------------------
@@ -696,7 +715,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   }
 
   /** The visible rows: sorted roots, and the children of each row the expanding hook shows, in order. */
-  const expandedRows = useMemo(
+  const expandedRows = lazy(
     (): readonly Row<TData>[] => {
       const sorted = sortedView();
       const out: Row<TData>[] = [];
@@ -709,74 +728,83 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       }
       return out;
     },
-    { lazy: true, name: "table.expanded" },
+    __DEV__ ? "expanded" : undefined,
   );
+
+  /** A page size the pager can use: a whole number of at least 1 (`Infinity` shows every row), 10 for NaN. */
+  const pageSizeOf = (raw: number): number => (raw >= 1 ? Math.floor(raw) : raw < 1 ? 1 : 10);
+  /** The first row of a page; `0 * Infinity` is NaN, so the first page starts at 0 whatever the size. */
+  const startOf = (index: number, size: number): number => (index === 0 ? 0 : index * size);
 
   const pageCountOf = (): number => {
     if (options.manualPagination === true) return options.pageCount ?? -1;
-    const size = Math.max(1, paginationSlice.current().pageSize);
-    return Math.ceil(expandedRows().length / size);
+    const total = expandedRows().length;
+    return total === 0
+      ? 0
+      : Math.max(1, Math.ceil(total / pageSizeOf(paginationSlice.current().pageSize)));
+  };
+
+  /** The page index in effect: a whole number from 0. A page past the last one shows no rows (documented). */
+  const pageIndexOf = (): number => {
+    const asked = paginationSlice.current().pageIndex;
+    if (options.manualPagination === true) return asked;
+    return asked > 0 ? Math.floor(asked) : 0;
   };
 
   /** The rows of the current page. */
-  const pageRows = useMemo(
+  const pageRows = lazy(
     (): readonly Row<TData>[] => {
       const rows = expandedRows();
       if (options.manualPagination === true) return rows;
-      const { pageIndex, pageSize } = paginationSlice.current();
-      const size = Math.max(1, pageSize);
-      return rows.slice(pageIndex * size, pageIndex * size + size);
+      const size = pageSizeOf(paginationSlice.current().pageSize);
+      const start = startOf(pageIndexOf(), size);
+      return rows.slice(start, start + size);
     },
-    { lazy: true, name: "table.page" },
+    __DEV__ ? "page" : undefined,
   );
 
   // ---------------------------------------------------------------------------------------------
   // Row models
   // ---------------------------------------------------------------------------------------------
   /** A model that is a list of rows: its flat rows are its rows. */
-  const listModel = (rows: readonly Row<TData>[]): RowModel<TData> => {
-    const rowsById = new Map<string, Row<TData>>();
-    for (const row of rows) rowsById.set(row.id, row);
-    return { rows, flatRows: rows, rowsById };
-  };
+  const listModel = (rows: readonly Row<TData>[]): RowModel<TData> =>
+    treeModel({ roots: rows, childrenOf: () => NO_ROWS });
 
-  const model = (build: () => RowModel<TData>, name: string): (() => RowModel<TData>) =>
-    useMemo(build, { lazy: true, name: `table.model.${name}` });
-  const coreModel = model(
+  const coreModel = lazy(
     () => treeModel({ roots: coreTree().roots, childrenOf: subRowsOf }),
-    "core",
+    __DEV__ ? "model.core" : undefined,
   );
-  const filteredModel = model(() => treeModel(filteredView()), "filtered");
-  const sortedModel = model(() => treeModel(sortedView()), "sorted");
-  const expandedModel = model(() => listModel(expandedRows()), "expanded");
-  const pageModel = model(() => listModel(pageRows()), "page");
-  const selectedModel = model(() => {
-    const selection = selectionSlice.current();
-    const selected: Row<TData>[] = [];
-    walk(coreTree().roots, subRowsOf, (row) => {
-      if (selection[row.id] === true) selected.push(row);
-    });
-    return listModel(selected);
-  }, "selected");
+  const filteredModel = lazy(
+    () => treeModel(filteredView()),
+    __DEV__ ? "model.filtered" : undefined,
+  );
+  const sortedModel = lazy(() => treeModel(sortedView()), __DEV__ ? "model.sorted" : undefined);
+  const expandedModel = lazy(
+    () => listModel(expandedRows()),
+    __DEV__ ? "model.expanded" : undefined,
+  );
+  const pageModel = lazy(() => listModel(pageRows()), __DEV__ ? "model.page" : undefined);
+  const selectedModel = lazy(
+    () => {
+      const selection = selectionSlice.current();
+      const selected: Row<TData>[] = [];
+      walk(coreTree().roots, subRowsOf, (row) => {
+        if (selection[row.id] === true) selected.push(row);
+      });
+      return listModel(selected);
+    },
+    __DEV__ ? "model.selected" : undefined,
+  );
 
   // ---------------------------------------------------------------------------------------------
   // The table
   // ---------------------------------------------------------------------------------------------
   const table: Omit<Table<TData>, OwnedTableName> = {
     getState(): TableState {
-      return {
-        sorting: read("sorting"),
-        columnFilters: read("columnFilters"),
-        globalFilter: read("globalFilter"),
-        pagination: read("pagination"),
-        rowSelection: read("rowSelection"),
-        expanded: read("expanded"),
-        columnVisibility: read("columnVisibility"),
-        columnOrder: read("columnOrder"),
-        columnPinning: read("columnPinning"),
-        columnSizing: read("columnSizing"),
-        grouping: read("grouping"),
-      };
+      // The keys of EMPTY are the slices, in the order the state is documented.
+      return Object.fromEntries(
+        Object.keys(EMPTY).map((name) => [name, read(name as keyof TableState)]),
+      ) as unknown as TableState;
     },
     sorting: sortingSlice.current,
     columnFilters: filtersSlice.current,
@@ -784,11 +812,11 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     pagination: paginationSlice.current,
     rowSelection: selectionSlice.current,
 
-    setSorting: (value) => sortingSlice.set(value),
-    setColumnFilters: (value) => filtersSlice.set(value),
-    setGlobalFilter: (value) => globalSlice.set(value),
-    setPagination: (value) => paginationSlice.set(value),
-    setRowSelection: (value) => selectionSlice.set(value),
+    setSorting: sortingSlice.set,
+    setColumnFilters: filtersSlice.set,
+    setGlobalFilter: globalSlice.set,
+    setPagination: paginationSlice.set,
+    setRowSelection: selectionSlice.set,
     resetSorting: () => sortingSlice.set(initial.sorting ?? []),
     resetColumnFilters: () => filtersSlice.set(initial.columnFilters ?? []),
     resetGlobalFilter: () => globalSlice.set(initial.globalFilter ?? ""),
@@ -796,39 +824,43 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
 
     getAllColumns: () => allColumns,
     getAllLeafColumns: () => leafColumns,
-    getVisibleLeafColumns: () => visibleLeaves(),
-    getColumn: (id) => columnOf(id),
+    getVisibleLeafColumns: visibleLeaves,
+    getColumn: columnOf,
 
-    getCoreRowModel: () => coreModel(),
-    getFilteredRowModel: () => filteredModel(),
-    getSortedRowModel: () => sortedModel(),
-    getExpandedRowModel: () => expandedModel(),
-    getPrePaginationRowModel: () => expandedModel(),
-    getRowModel: () => pageModel(),
-    getSelectedRowModel: () => selectedModel(),
+    getCoreRowModel: coreModel,
+    getFilteredRowModel: filteredModel,
+    getSortedRowModel: sortedModel,
+    getExpandedRowModel: expandedModel,
+    getPrePaginationRowModel: expandedModel,
+    getRowModel: pageModel,
+    getSelectedRowModel: selectedModel,
     getRow: (id) => coreTree().rowsById.get(id),
     getRowCount: () => filteredKept().size,
 
-    getPageCount: () => pageCountOf(),
-    getCanPreviousPage: () => paginationSlice.current().pageIndex > 0,
+    getPageCount: pageCountOf,
+    getCanPreviousPage: () => pageIndexOf() > 0,
     getCanNextPage: () => {
       const count = pageCountOf();
-      return count < 0 || paginationSlice.current().pageIndex < count - 1;
+      return count < 0 || pageIndexOf() < count - 1;
     },
     setPageIndex(index) {
       const count = pageCountOf();
       const upper = count < 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, count - 1);
-      const clamped = Math.min(Math.max(0, Math.floor(index)), upper);
+      // A NaN (an empty number input, `parseInt("")`) is the first page, never a NaN in the state.
+      const clamped = Math.min(index > 0 ? Math.floor(index) : 0, upper);
       paginationSlice.set({ ...paginationSlice.current(), pageIndex: clamped });
     },
     setPageSize(size) {
-      const next = Math.max(1, Math.floor(size));
+      const next = pageSizeOf(size);
       const current = paginationSlice.current();
-      const firstRow = current.pageIndex * current.pageSize;
-      paginationSlice.set({ pageIndex: Math.floor(firstRow / next), pageSize: next });
+      const firstRow = startOf(pageIndexOf(), pageSizeOf(current.pageSize));
+      // An index past the one page of an `Infinity` size (written through `setPagination`) starts at no finite row: the
+      // first page, never an `Infinity` or `NaN` index.
+      const pageIndex = Number.isFinite(firstRow) ? Math.floor(firstRow / next) : 0;
+      paginationSlice.set({ pageIndex, pageSize: next });
     },
-    previousPage: () => table.setPageIndex(paginationSlice.current().pageIndex - 1),
-    nextPage: () => table.setPageIndex(paginationSlice.current().pageIndex + 1),
+    previousPage: () => table.setPageIndex(pageIndexOf() - 1),
+    nextPage: () => table.setPageIndex(pageIndexOf() + 1),
     firstPage: () => table.setPageIndex(0),
     lastPage: () => table.setPageIndex(Math.max(0, pageCountOf() - 1)),
 
@@ -862,7 +894,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
       getCanSort: (): boolean => isSortable(column),
       getIsSorted: (): false | "asc" | "desc" => {
         const entry = sortingSlice.current().find((item) => item.id === column.id);
-        return entry === undefined ? false : entry.desc ? "desc" : "asc";
+        return entry !== undefined && (entry.desc ? "desc" : "asc");
       },
       getFirstSortDir: (): "asc" | "desc" =>
         column.columnDef.sortDescFirst === true ? "desc" : "asc",
@@ -905,9 +937,10 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
   // Every member a feature owns exists from the start and throws until its feature is installed. The
   // literal above lists the core members only, so the cast adds the rest (they are all in place now).
   const columnStubs = absentMembers(OWNED_COLUMN, "column");
+  const owners = new Map<string, TableFeatureName>();
   const complete = Object.assign(
     table,
-    absentMembers(OWNED_TABLE, "table"),
+    absentMembers(OWNED_TABLE, "table", owners),
   ) as unknown as Table<TData>;
   for (const column of allColumns) Object.assign(column, columnStubs);
 
@@ -923,12 +956,13 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     targetsOf,
     slice,
     resetPage,
-    core: () => coreTree(),
+    liveRowIds,
+    core: coreTree,
     makeRow,
-    filtered: () => filteredView(),
-    grouped: () => groupedView(),
+    filtered: filteredView,
+    grouped: groupedView,
     keepFor,
-    model,
+    model: lazy,
   };
 
   // Features: one object per name (the same object twice counts once), each installed once.
@@ -941,10 +975,11 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     }
     chosen.set(feature.name, feature);
   }
-  for (const [key, feature] of STATE_OWNER) {
+  for (const [name, feature] of owners) {
     if (chosen.has(feature)) continue;
+    const key = name as keyof TableState;
     if (initial[key] !== undefined || options.state?.[key] !== undefined) {
-      throw featureMissing(feature, `initialState.${key}`);
+      throw featureMissing(feature, `initialState.${name}`);
     }
   }
   if (options.locale !== undefined && !chosen.has("locale"))

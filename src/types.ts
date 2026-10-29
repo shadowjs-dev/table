@@ -135,8 +135,9 @@ export interface PaginationState {
    */
   readonly pageIndex: number;
   /**
-   * Rows per page. A value below 1 is read as 1 when the page is sliced; `setPageSize` rounds down
-   * and keeps it at least 1.
+   * Rows per page. A value below 1 is read as 1 when the page is sliced, a fraction is rounded down,
+   * `NaN` is read as 10, and `Infinity` puts every row on one page. `setPageSize` rounds down and keeps
+   * it at least 1.
    */
   readonly pageSize: number;
 }
@@ -691,8 +692,9 @@ export interface ColumnDefBase<TData, TValue = unknown> {
 /**
  * The built-in sorts. `alphanumeric`, `text` and `datetime` compare numbers by value, `Date`s by
  * time and anything else by its text, ignoring case. `basic` compares numbers and `Date`s the same
- * way and other values by their text with case (code unit order). Values that are `undefined` or
- * `null` sort last in either direction.
+ * way and other values by their text with case (code unit order). A column that mixes kinds orders
+ * numbers (and bigints) first, then `Date`s, then text. Values that are `undefined`, `null` or `NaN`,
+ * and invalid `Date`s, sort last in either direction.
  *
  * @example
  * ```ts

@@ -61,6 +61,15 @@ it("sorts and reads rows", () => {
 
 - Reference: `/reference/table/` on the documentation site.
 
+## Production error codes
+
+A production build keeps a short code instead of the development explanation, so message text never reaches user bundles. Search this table for the code. In the explanation, `…` stands for a value the development message names. A code followed by a word names the option, feature or member at fault.
+
+| Code | Development explanation |
+| --- | --- |
+| `TABLE_FEATURE` | … needs the … feature: import { … } from "@shadow-js/table/…" and pass createTable({ features: […] }), or use the full list from "@shadow-js/table/full". |
+| `TABLE_LOCALE` | the locale feature needs the locale option: createTable({ features: [locale], locale: "de" }). |
+
 ## Dependencies
 
 - Runtime: none.

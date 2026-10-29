@@ -11,8 +11,12 @@ import type { TableFeatureName } from "../types";
  * @internal
  */
 export function featureMissing(feature: TableFeatureName, what: string): TypeError {
+  // The sentence and the import hint are development text: a production build keeps the code, the
+  // feature and the member.
   return new TypeError(
-    `[shadow-table] ${what} needs the ${feature} feature: import { ${feature} } from "@shadow-js/table/${feature}" and pass createTable({ features: [${feature}] }), or use the full list from "@shadow-js/table/full".`,
+    __DEV__
+      ? `[shadow-table] ${what} needs the ${feature} feature: import { ${feature} } from "@shadow-js/table/${feature}" and pass createTable({ features: [${feature}] }), or use the full list from "@shadow-js/table/full".`
+      : `TABLE_FEATURE ${feature} ${what}`,
   );
 }
 

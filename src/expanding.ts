@@ -49,7 +49,7 @@ export const expanding: TableFeature<"expanding"> = {
     );
     // Every write goes through the slice, so the per-row flags can never disagree with the state.
     const started = untrack(expandedSlice.current);
-    const flags = keyedFlags(started === true ? {} : started);
+    const flags = keyedFlags(started === true ? {} : started, host.liveRowIds);
 
     /** Whether a row is expanded: from its own flag when the state is uncontrolled. */
     const isExpanded = (id: string): boolean => {
@@ -58,8 +58,7 @@ export const expanding: TableFeature<"expanding"> = {
       return flags.get(id);
     };
 
-    hooks.expands = (row) => isExpanded(row.id);
-    hooks.isExpanded = (row) => isExpanded(row.id);
+    hooks.expands = hooks.isExpanded = (row) => isExpanded(row.id);
     hooks.canExpand = (row) =>
       host.grouped().childrenOf(row).length > 0 && options.enableExpanding !== false;
     hooks.toggleRow = (row, value) => {

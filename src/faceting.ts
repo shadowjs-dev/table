@@ -5,8 +5,8 @@
  * @packageDocumentation
  */
 import type { TableHost } from "./internal/host";
-import { walk } from "./internal/tree";
-import type { Row, TableFeature } from "./types";
+import { subRowsOf, walk } from "./internal/tree";
+import type { Column, Row, TableFeature } from "./types";
 
 /**
  * The `faceting` feature: the values a filter would leave, for filter widgets. Each facet ignores the
@@ -37,6 +37,13 @@ import type { Row, TableFeature } from "./types";
 export const faceting: TableFeature<"faceting"> = {
   name: "faceting",
   install<TData>(host: TableHost<TData>): void {
+    // Every kept row of the tree, once; the column's own filter is left out.
+    const eachKept = (column: Column<TData>, visit: (row: Row<TData>) => void): void => {
+      const kept = host.keepFor(column.id);
+      walk(host.core().roots, subRowsOf, (row) => {
+        if (kept.has(row.id)) visit(row);
+      });
+    };
     for (const column of host.columns) {
       Object.assign(column, {
         getFacetedRowModel: (): readonly Row<TData>[] => {
@@ -45,33 +52,23 @@ export const faceting: TableFeature<"faceting"> = {
         },
         getFacetedUniqueValues: (): Map<unknown, number> => {
           const counts = new Map<unknown, number>();
-          const kept = host.keepFor(column.id);
-          walk(
-            host.core().roots,
-            (row) => row.subRows,
-            (row) => {
-              if (!kept.has(row.id) || row.subRows.length > 0) return;
-              const value = row.getValue(column.id);
-              counts.set(value, (counts.get(value) ?? 0) + 1);
-            },
-          );
+          eachKept(column, (row) => {
+            if (row.subRows.length > 0) return;
+            const value = row.getValue(column.id);
+            counts.set(value, (counts.get(value) ?? 0) + 1);
+          });
           return counts;
         },
         getFacetedMinMaxValues: (): [number, number] | undefined => {
           let min: number | undefined;
           let max: number | undefined;
-          const kept = host.keepFor(column.id);
-          walk(
-            host.core().roots,
-            (row) => row.subRows,
-            (row) => {
-              if (!kept.has(row.id)) return;
-              const value = row.getValue(column.id);
-              if (typeof value !== "number") return;
-              min = min === undefined ? value : Math.min(min, value);
-              max = max === undefined ? value : Math.max(max, value);
-            },
-          );
+          eachKept(column, (row) => {
+            const value = row.getValue(column.id);
+            // NaN would make both bounds NaN for good (`Math.min(x, NaN)` is NaN).
+            if (typeof value !== "number" || Number.isNaN(value)) return;
+            min = min === undefined ? value : Math.min(min, value);
+            max = max === undefined ? value : Math.max(max, value);
+          });
           return min === undefined || max === undefined ? undefined : [min, max];
         },
       });

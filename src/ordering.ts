@@ -39,6 +39,10 @@ export const ordering: TableFeature<"ordering"> = {
   install<TData>(host: TableHost<TData>): void {
     const { table, hooks } = host;
     const orderSlice = host.slice("columnOrder", []);
+    Object.assign(table, {
+      columnOrder: orderSlice.current,
+      setColumnOrder: orderSlice.set,
+    });
     hooks.ordered = () => {
       const order = orderSlice.current();
       const rank = new Map(order.map((id, index) => [id, index] as const));
@@ -51,9 +55,5 @@ export const ordering: TableFeature<"ordering"> = {
         })
         .map((entry) => entry.column);
     };
-    Object.assign(table, {
-      columnOrder: orderSlice.current,
-      setColumnOrder: orderSlice.set,
-    });
   },
 };

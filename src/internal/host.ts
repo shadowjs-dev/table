@@ -36,11 +36,11 @@ export interface RowInit<TData> {
   readonly index: number;
   readonly depth: number;
   readonly original: TData;
-  readonly parent: Row<TData> | undefined;
+  readonly parent?: Row<TData> | undefined;
   readonly subRows: Row<TData>[];
-  readonly isGrouped: boolean;
-  readonly groupingColumnId: string | undefined;
-  readonly groupingValue: unknown;
+  /** Set on a group row only: the column it groups by, which is what makes the row a group. */
+  readonly groupingColumnId?: string | undefined;
+  readonly groupingValue?: unknown;
 }
 
 /**
@@ -108,6 +108,11 @@ export interface TableHost<TData> {
   ) => Slice<TableState[K]>;
   /** Returns to the first page (a change of the rows a filter or a grouping keeps). */
   readonly resetPage: () => void;
+  /**
+   * The test for the ids a row can have right now: the rows of the data and the group rows of the current grouping. Per-row
+   * flags use it to drop the cells of rows that left.
+   */
+  readonly liveRowIds: () => ReadonlySet<string>;
   /** The data as a tree of core rows. */
   readonly core: () => CoreRows<TData>;
   /** Creates a row object bound to this table. */
@@ -119,7 +124,7 @@ export interface TableHost<TData> {
   /** The ids of the core rows kept by the filters, leaving one column's own filter out when given. */
   readonly keepFor: (skip: string | undefined) => Set<string>;
   /** Creates a memoized row model. */
-  readonly model: (build: () => RowModel<TData>, name: string) => () => RowModel<TData>;
+  readonly model: (build: () => RowModel<TData>, name?: string) => () => RowModel<TData>;
 }
 
 /**

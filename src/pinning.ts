@@ -75,16 +75,13 @@ export const pinning: TableFeature<"pinning"> = {
         getCanPin: (): boolean => column.columnDef.enablePinning !== false,
         pin: (position: "left" | "right" | false): void => {
           const current = pinningSlice.current();
-          const moved = new Set(host.targetsOf(column).map((leaf) => leaf.id));
-          const strip = (list: readonly string[] | undefined): string[] =>
-            (list ?? []).filter((id) => !moved.has(id));
-          const left = strip(current.left);
-          const right = strip(current.right);
-          for (const leaf of host.targetsOf(column)) {
-            if (position === "left") left.push(leaf.id);
-            if (position === "right") right.push(leaf.id);
-          }
-          pinningSlice.set({ left, right });
+          const moved = host.targetsOf(column).map((leaf) => leaf.id);
+          // The moved leaves leave both sides, and join the end of the side they are pinned to.
+          const without = (side: "left" | "right"): string[] => {
+            const rest = (current[side] ?? []).filter((id) => !moved.includes(id));
+            return position === side ? [...rest, ...moved] : rest;
+          };
+          pinningSlice.set({ left: without("left"), right: without("right") });
         },
       });
     }

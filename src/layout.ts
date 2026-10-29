@@ -63,26 +63,25 @@ export const layout: TableFeature<"layout"> = {
       level: number,
       deepest: number,
     ): Header<TData>[] => {
-      const runs: { column: Column<TData>; leaves: Column<TData>[]; placeholder: boolean }[] = [];
+      const runs: { column: Column<TData>; leaves: Column<TData>[] }[] = [];
       for (const leaf of leaves) {
-        if (leaf.depth < level) {
-          runs.push({ column: leaf, leaves: [leaf], placeholder: true });
-          continue;
-        }
+        // A leaf shallower than the row stands in its own run (a placeholder); a run of the row's own
+        // depth is a group, and it can only be joined by leaves under that same group.
         const owner = ancestorAt(leaf, level);
         const last = runs[runs.length - 1];
-        if (last !== undefined && !last.placeholder && last.column === owner)
-          last.leaves.push(leaf);
-        else runs.push({ column: owner, leaves: [leaf], placeholder: false });
+        if (last !== undefined && last.column === owner) last.leaves.push(leaf);
+        else runs.push({ column: owner, leaves: [leaf] });
       }
       return runs.map((run): Header<TData> => {
+        // A placeholder is a column above its row: only a leaf shallower than the row ends up there.
+        const placeholder = run.column.depth < level;
         const header: Header<TData> = {
-          id: run.placeholder ? `${run.column.id}_placeholder_${level}` : run.column.id,
+          id: placeholder ? `${run.column.id}_placeholder_${level}` : run.column.id,
           column: run.column,
           colSpan: run.leaves.length,
-          rowSpan: !run.placeholder && run.column.columns.length === 0 ? deepest - level + 1 : 1,
+          rowSpan: !placeholder && run.column.columns.length === 0 ? deepest - level + 1 : 1,
           depth: level,
-          isPlaceholder: run.placeholder,
+          isPlaceholder: placeholder,
           getContext: (): HeaderContext<TData, unknown> => ({
             table,
             column: run.column,
@@ -92,17 +91,6 @@ export const layout: TableFeature<"layout"> = {
         };
         return header;
       });
-    };
-
-    /** The offset of a column's leaves in a section: the widths of the shown leaves before them. */
-    const startIn = (column: Column<TData>, side: Side): number => {
-      const targets = host.targetsOf(column);
-      let offset = 0;
-      for (const leaf of hooks.sections(side)) {
-        if (targets.includes(leaf)) return offset;
-        offset += hooks.size(leaf);
-      }
-      return 0;
     };
 
     Object.assign(table, {
@@ -127,7 +115,13 @@ export const layout: TableFeature<"layout"> = {
           const targets = host.targetsOf(column);
           const visible = targets.find((leaf) => hooks.visible(leaf)) ?? targets[0];
           const side = position ?? (visible === undefined ? "center" : hooks.side(visible));
-          return startIn(column, side);
+          // The offset of the column's leaves in the section: the widths of the shown leaves before them.
+          let offset = 0;
+          for (const leaf of hooks.sections(side)) {
+            if (targets.includes(leaf)) return offset;
+            offset += hooks.size(leaf);
+          }
+          return 0;
         },
       });
     }

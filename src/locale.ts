@@ -43,7 +43,9 @@ export const locale: TableFeature<"locale"> = {
     const tag = host.options.locale;
     if (tag === undefined) {
       throw new TypeError(
-        '[shadow-table] the locale feature needs the locale option: createTable({ features: [locale], locale: "de" }).',
+        __DEV__
+          ? '[shadow-table] the locale feature needs the locale option: createTable({ features: [locale], locale: "de" }).'
+          : "TABLE_LOCALE",
       );
     }
     const languages = typeof tag === "string" ? tag : [...tag];

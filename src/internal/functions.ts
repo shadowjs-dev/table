@@ -105,13 +105,13 @@ export function filterByName(
 }
 
 /**
- * Orders two texts by character code.
- * @param left The first text.
- * @param right The second text.
+ * Orders two texts by character code (or two numbers by value: the same three-way test).
+ * @param left The first value.
+ * @param right The second value.
  * @returns Negative when `left` comes first, positive when `right` does, 0 when they are equal.
  * @internal
  */
-export function compareCodes(left: string, right: string): number {
+export function compareCodes<T extends string | number | bigint>(left: T, right: T): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
@@ -127,8 +127,30 @@ export function compareCaseless(left: string, right: string): number {
 }
 
 /**
- * Compares two values for sorting: two numbers by value, two `Date`s by time, anything else by its
- * `String` form with `compareText`. Missing values are handled by the caller.
+ * Whether a value has no place in an order: a missing value, `NaN`, or an invalid `Date`. The
+ * built-in sorts put such values last in either direction, since a comparator that returns `NaN`
+ * for them would make the order depend on the engine's sort algorithm.
+ * @param value The value to test.
+ * @returns `true` when the value cannot be compared.
+ * @internal
+ */
+export function isUnordered(value: unknown): boolean {
+  const point = value instanceof Date ? value.getTime() : value;
+  return isMissing(point) || Number.isNaN(point);
+}
+
+/** 0 for numbers and bigints, 1 for dates, 2 for everything else (compared as text). */
+function orderClass(value: unknown): number {
+  if (typeof value === "number" || typeof value === "bigint") return 0;
+  return value instanceof Date ? 1 : 2;
+}
+
+/**
+ * Compares two values for sorting: two numbers (or bigints) by value, two `Date`s by time, anything
+ * else by its `String` form with `compareText`. Values of different kinds are ordered by kind
+ * (numbers, then dates, then text), so a column that mixes them still has one consistent order
+ * (comparing a number with text by its text would make the order cyclic). Unordered values (see
+ * {@link isUnordered}) are handled by the caller.
  * @param a The first value.
  * @param b The second value.
  * @param compareText How text is ordered: `compareCaseless` and `compareCodes` for the built-in sorts, or the
@@ -141,9 +163,13 @@ export function compareValues(
   b: unknown,
   compareText: (left: string, right: string) => number,
 ): number {
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime();
-  return compareText(String(a), String(b));
+  const kind = orderClass(a);
+  const other = orderClass(b);
+  if (kind !== other) return kind - other;
+  if (kind === 2) return compareText(String(a), String(b));
+  return kind === 0
+    ? compareCodes(a as number | bigint, b as number | bigint)
+    : compareCodes((a as Date).getTime(), (b as Date).getTime());
 }
 
 /**
