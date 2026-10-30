@@ -74,7 +74,7 @@ A production build keeps a short code instead of the development explanation, so
 ## Dependencies
 
 - Runtime: none.
-- Peers: `@shadow-js/core` and `@shadow-js/web` `^1.0.0`: reactive table state and the renderer for table components.
+- Peers: `@shadow-js/core` and `@shadow-js/web` `^1.0.3`: reactive table state and the renderer for table components.
 
 ## Types
 
