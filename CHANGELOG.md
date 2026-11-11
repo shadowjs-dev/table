@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.5
+
+### Fixed
+
+- A development warning says once when `getRowId` gives the same id to more than one row (behavior is unchanged).
+
 ## 1.0.4
 
 ### Changed

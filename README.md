@@ -63,7 +63,7 @@ it("sorts and reads rows", () => {
 
 ## Production error codes
 
-A production build keeps a short code instead of the development explanation, so message text never reaches user bundles. Search this table for the code. In the explanation, `…` stands for a value the development message names. A code followed by a word names the option, feature or member at fault.
+For the errors in the table below, a production build keeps a short code instead of the development explanation; other errors keep their message in every build. Search this table for the code. In the explanation, `…` stands for a value the development message names. A code followed by a word names the option, feature or member at fault.
 
 | Code | Development explanation |
 | --- | --- |
@@ -74,7 +74,7 @@ A production build keeps a short code instead of the development explanation, so
 ## Dependencies
 
 - Runtime: none.
-- Peers: `@shadow-js/core` and `@shadow-js/web` `^1.0.3`: reactive table state and the renderer for table components.
+- Peers: `@shadow-js/core` and `@shadow-js/web` `^1.0.5`: reactive table state and the renderer for table components.
 
 ## Types
 

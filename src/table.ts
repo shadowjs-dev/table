@@ -412,6 +412,7 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
     const queue: { items: readonly TData[]; parent: Row<TData> | undefined; depth: number }[] = [
       { items: dataOf(), parent: undefined, depth: 0 },
     ];
+    let warned = false;
     // The loop sees the levels pushed while it runs.
     for (const level of queue) {
       level.items.forEach((original, index) => {
@@ -426,6 +427,14 @@ export function createTable<TData>(options: TableOptions<TData>): Table<TData> {
           subRows: [],
         });
         (level.parent === undefined ? roots : (level.parent.subRows as Row<TData>[])).push(row);
+        // Filtering, selection and expansion are keyed by id: two rows with one id are one row to them (a filter
+        // that keeps one keeps both), so the repeated id is said once, in development.
+        if (__DEV__ && !warned && rowsById.has(id)) {
+          warned = true;
+          console.warn(
+            `[shadow-table] getRowId gave "${id}" to more than one row. Row ids must be unique: filtering, selection and expansion are keyed by id.`,
+          );
+        }
         rowsById.set(id, row);
         if (children.length > 0)
           queue.push({ items: children, parent: row, depth: level.depth + 1 });
